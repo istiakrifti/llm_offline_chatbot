@@ -1,7 +1,18 @@
 import 'package:flutter/material.dart';
 import 'ai_chat_page.dart';
+import 'assets_initializer.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  try {
+    // await AssetManager.deleteCopiedAssets();
+    await AssetManager.prepareAssets();
+    print('Assets prepared successfully.');
+  } catch (error) {
+    print('Error preparing assets: $error');
+  }
+
   runApp(const MyApp());
 }
 
