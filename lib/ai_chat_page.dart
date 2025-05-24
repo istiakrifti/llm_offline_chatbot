@@ -1,12 +1,12 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart';
+import 'dart:io';
+
 import 'llama_ffi.dart';
 import 'llama_chat_ffi.dart';
-import 'package:flutter/foundation.dart';
 
 class AIChatPage extends StatefulWidget {
   const AIChatPage({super.key});
@@ -17,12 +17,15 @@ class AIChatPage extends StatefulWidget {
 
 class _AIChatPageState extends State<AIChatPage> {
   final TextEditingController _controller = TextEditingController();
-  String outputByAI = '';
+  final ScrollController _scrollController = ScrollController();
+
+  List<Map<String, String>> messages = []; // {"role": "user"/"assistant", "text": "..."}
   bool isLoading = false;
 
   @override
   void dispose() {
     _controller.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -33,49 +36,8 @@ class _AIChatPageState extends State<AIChatPage> {
     return lang;
   }
 
-  // Future<List<double>> _getEmbedding(String input) async {
-  //   final dir = await getApplicationSupportDirectory();
-  //   print('[Embedding] Directory: ${dir.path}');
-  //   final embeddingBin = '${dir.path}/llama-embedding';
-  //   final modelPath = '${dir.path}/multilingual-e5-base-q4_0.gguf';
-
-  //   print('\n[Embedding] Input: "$input"');
-  //   print('[Embedding] Binary: $embeddingBin');
-  //   print('[Embedding] Model: $modelPath');
-
-  //   print('Executable exists: ${File(embeddingBin).existsSync()}');
-  //   print('Executable permissions: ${await Process.run('ls', ['-l', embeddingBin])}');
-  //   final result1 = await Process.run('ls', ['-l']);
-  //   print(result1.stdout);
-
-  //   final result = await Process.run(
-  //     embeddingBin,
-  //     ['-m', modelPath, '-p', input],
-  //     environment: {'LD_LIBRARY_PATH': '$dir.path'}
-  //   );
-
-  //   if (result.exitCode != 0) {
-  //     print('[Embedding] Error: ${result.stderr}');
-  //     throw Exception('Embedding error: ${result.stderr}');
-  //   }
-
-  //   final lines = result.stdout.toString().split('\n');
-  //   final vectorLine = lines.lastWhere((line) => line.trim().isNotEmpty);
-  //   print('[Embedding] Raw output: $vectorLine');
-
-  //   // Safely parse and cast each element to double
-  //   final List<double> vector = (jsonDecode(vectorLine) as List)
-  //       .map((e) => (e as num).toDouble())
-  //       .toList();
-
-  //   print('[Embedding] Vector size: ${vector.length}');
-  //   return vector;
-  // }
   Future<List<double>> _getEmbedding(String input) async {
     print('\n[Embedding] Input: "$input"');
-    // final rawOutput = await runEmbeddingFromNative(input);
-    // final rawOutput = await compute(runEmbeddingInBackground, input);
-    
     final dir = await getApplicationSupportDirectory();
     final modelPath = '${dir.path}/multilingual-e5-base-q4_0.gguf';
 
@@ -85,17 +47,14 @@ class _AIChatPageState extends State<AIChatPage> {
     });
 
     print('[Embedding] Raw output: $rawOutput');
-    // If your C++ prints JSON at the end (like: [0.1, 0.2, ...])
     final lines = rawOutput.split('\n');
     final vectorLine = lines.lastWhere((line) => line.trim().startsWith('['));
-    
-
     final List<double> vector = (jsonDecode(vectorLine) as List)
         .map((e) => (e as num).toDouble())
         .toList();
 
     print('[Embedding] Vector size: ${vector.length}');
-    return vector; 
+    return vector;
   }
 
   double _cosineSimilarity(List<double> a, List<double> b) {
@@ -130,9 +89,6 @@ class _AIChatPageState extends State<AIChatPage> {
     final topContext = store.take(1).map((e) => e['text']).join('\n');
     print('[Search] Top context:\n$topContext');
 
-    // final llmBin = '${dir.path}/llama-run';
-    // final modelPath = '${dir.path}/qwen1.5-1.8b-finetuned-q3_k_m.gguf';
-    // final prompt = "Context:\n$topContext\n\nUser: $query\nAssistant:";
     final prompt = """
       <|im_start|>system
       Use only the information to answer the question<|im_end|>
@@ -151,7 +107,6 @@ class _AIChatPageState extends State<AIChatPage> {
 
     print('[LLM] Prompt:\n$prompt');
 
-    // final output = await runChatFromFlutter(prompt);
     final modelPath = '${dir.path}/tinyllama-1.1b-chat-v1.0.Q4_0.gguf';
     print('[FFI] Model Path: $modelPath');
     final output = await compute(runChatFromFlutterWithPath, {
@@ -168,51 +123,104 @@ class _AIChatPageState extends State<AIChatPage> {
     if (query.isEmpty) return;
 
     setState(() {
+      messages.add({'role': 'user', 'text': query});
       isLoading = true;
-      outputByAI = '';
+      _controller.clear();
     });
+
+    _scrollToBottom();
 
     try {
       final response = await _searchAndAnswer(query);
-      setState(() => outputByAI = response);
+      setState(() => messages.add({'role': 'assistant', 'text': response}));
     } catch (e) {
-      setState(() => outputByAI = 'Error: ${e.toString()}');
+      setState(() => messages.add({'role': 'assistant', 'text': 'Error: ${e.toString()}'}));
     } finally {
       setState(() => isLoading = false);
+      _scrollToBottom();
     }
+  }
+
+  void _scrollToBottom() {
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Widget _buildMessageBubble(String text, String role) {
+    final isUser = role == 'user';
+    final alignment = isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final bgColor = isUser ? Colors.deepPurpleAccent : Colors.grey[200];
+    final textColor = isUser ? Colors.white : Colors.black87;
+
+    return Column(
+      crossAxisAlignment: alignment,
+      children: [
+        Container(
+          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(text, style: TextStyle(color: textColor, fontSize: 15)),
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('AI Chat')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            TextField(
-              controller: _controller,
-              decoration: const InputDecoration(
-                labelText: 'Enter your question',
-                border: OutlineInputBorder(),
-              ),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              controller: _scrollController,
+              itemCount: messages.length + (isLoading ? 1 : 0),
+              itemBuilder: (context, index) {
+                if (index == messages.length && isLoading) {
+                  return const Padding(
+                    padding: EdgeInsets.all(12.0),
+                    child: Text("Assistant is typing...", style: TextStyle(fontStyle: FontStyle.italic)),
+                  );
+                }
+                final msg = messages[index];
+                return _buildMessageBubble(msg['text']!, msg['role']!);
+              },
             ),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: isLoading ? null : _handleQuery,
-              child: Text(isLoading ? 'Thinking...' : 'Ask'),
-            ),
-            const SizedBox(height: 20),
-            Expanded(
-              child: SingleChildScrollView(
-                child: Text(
-                  outputByAI,
-                  style: const TextStyle(fontSize: 16),
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    onSubmitted: (_) => _handleQuery(),
+                    decoration: const InputDecoration(
+                      hintText: 'Ask something...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: Icon(isLoading ? Icons.hourglass_empty : Icons.send),
+                  onPressed: isLoading ? null : _handleQuery,
+                )
+              ],
             ),
-          ],
-        ),
+          )
+        ],
       ),
     );
   }

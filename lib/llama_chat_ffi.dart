@@ -27,6 +27,8 @@ Future<String> runChatFromFlutterWithPath(Map<String, String> input) async {
     './llama-run'.toNativeUtf8(),
     modelPath.toNativeUtf8(),
     prompt.toNativeUtf8(),
+    // '-c'.toNativeUtf8(), // number of tokens
+    // '512'.toNativeUtf8(),
   ];
 
   final Pointer<Pointer<Utf8>> argv = calloc<Pointer<Utf8>>(args.length);
